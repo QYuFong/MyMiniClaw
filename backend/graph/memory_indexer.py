@@ -10,10 +10,9 @@ from llama_index.core import (
     load_index_from_storage,
 )
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core import Settings
 
-import config as global_config
+from utils.embedding import get_embedding_model
 
 
 class MemoryIndexer:
@@ -29,23 +28,8 @@ class MemoryIndexer:
     
     def rebuild_index(self) -> None:
         """重建 MEMORY.md 索引"""
-        # 配置 Embedding 模型
-        try:
-            Settings.embed_model = OpenAIEmbedding(
-                api_key=global_config.config.openai_api_key,
-                api_base=global_config.config.openai_base_url,
-                model_name=global_config.config.embedding_model,
-            )
-        except ValueError:
-            # 如果模型名称不被识别，尝试使用 text-embedding-3-small 作为默认值
-            # 但实际 API 调用时会使用配置的模型
-            Settings.embed_model = OpenAIEmbedding(
-                api_key=global_config.config.openai_api_key,
-                api_base=global_config.config.openai_base_url,
-                model_name="text-embedding-3-small",
-            )
-            # 手动覆盖模型名称
-            Settings.embed_model.model_name = global_config.config.embedding_model
+        # 配置 Embedding 模型（优先使用本地 Ollama，否则回退到 OpenAI 兼容模型）
+        Settings.embed_model = get_embedding_model()
         
         # 读取 MEMORY.md
         if not self.memory_file.exists():
@@ -117,12 +101,8 @@ class MemoryIndexer:
         if self._index is None:
             if (self.storage_dir / "docstore.json").exists():
                 try:
-                    # 配置 Embedding 模型
-                    Settings.embed_model = OpenAIEmbedding(
-                        api_key=global_config.config.openai_api_key,
-                        api_base=global_config.config.openai_base_url,
-                        model=global_config.config.embedding_model,
-                    )
+                    # 配置 Embedding 模型（优先使用本地 Ollama）
+                    Settings.embed_model = get_embedding_model()
                     
                     storage_context = StorageContext.from_defaults(
                         persist_dir=str(self.storage_dir)

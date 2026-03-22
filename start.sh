@@ -1,71 +1,115 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Mini-OpenClaw startup script (Linux / macOS)
+# Uses Conda environment: miniclaw (Python 3.12)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 echo "========================================"
-echo "Mini-OpenClaw 启动脚本"
+echo "Mini-OpenClaw Startup Script"
 echo "========================================"
 echo ""
 
-# 检查 Python
-if ! command -v python3 &> /dev/null; then
-    echo "[错误] 未找到 Python，请先安装 Python 3.10+"
-    exit 1
+# --- Conda ---
+if ! command -v conda &>/dev/null; then
+  echo "[ERROR] Conda not found. Please install Anaconda or Miniconda and ensure 'conda' is on PATH."
+  exit 1
 fi
 
-# 检查 Node.js
-if ! command -v node &> /dev/null; then
-    echo "[错误] 未找到 Node.js，请先安装 Node.js 18+"
-    exit 1
+# shellcheck disable=SC1091
+eval "$(conda shell.bash hook)"
+
+MINICLAW_ENV="miniclaw"
+
+if ! conda env list | awk '!/^#/ && NF {print $1}' | grep -qx "$MINICLAW_ENV"; then
+  echo "[INFO] Conda environment '$MINICLAW_ENV' not found."
+  echo "[INFO] Creating environment: conda create -n $MINICLAW_ENV python=3.12"
+  conda create -n "$MINICLAW_ENV" python=3.12 -y
+  echo "[INFO] Environment '$MINICLAW_ENV' created successfully."
+else
+  echo "[INFO] Conda environment '$MINICLAW_ENV' found."
 fi
 
-echo "[1/4] 检查后端环境..."
-cd backend
+echo "[1/4] Activating Conda environment '$MINICLAW_ENV'..."
+conda activate "$MINICLAW_ENV"
+echo "[INFO] Conda environment '$MINICLAW_ENV' activated successfully."
+
+# --- Node.js ---
+if ! command -v node &>/dev/null; then
+  echo "[ERROR] Node.js not found. Please install Node.js 18+."
+  exit 1
+fi
+
+echo "[2/4] Checking backend environment..."
+cd "$SCRIPT_DIR/backend"
 if [ ! -f .env ]; then
-    echo "[警告] 未找到 .env 文件，请先配置环境变量"
-    echo "运行: cp .env.example .env"
-    echo "然后编辑 .env 文件填入你的 API Keys"
-    exit 1
+  echo "[WARNING] .env file not found. Configure environment variables first."
+  echo "Run: cp .env.example .env"
+  echo "Then edit .env and add your API keys."
+  exit 1
 fi
 
-echo "[2/4] 安装后端依赖（如需要）..."
-pip3 install -r requirements.txt
+echo "[3/4] Installing backend dependencies (in $MINICLAW_ENV)..."
+if ! python -m pip show fastapi &>/dev/null; then
+  echo "[INFO] Installing backend dependencies from requirements.txt..."
+  python -m pip install -r requirements.txt
+else
+  echo "[INFO] Backend dependencies already installed (fastapi present)."
+fi
 
-echo "[3/4] 安装前端依赖（如需要）..."
-cd ../frontend
+echo "[4/4] Installing frontend dependencies..."
+cd "$SCRIPT_DIR/frontend"
 if [ ! -d node_modules ]; then
-    echo "正在安装前端依赖..."
-    npm install
+  echo "[INFO] Installing frontend dependencies..."
+  npm install
+else
+  echo "[INFO] Frontend dependencies already installed."
 fi
 
-echo "[4/4] 启动服务..."
 echo ""
 echo "========================================"
-echo "后端将在端口 8002 启动"
-echo "前端将在端口 3000 启动"
+echo "Starting services..."
+echo "Backend: port 8002 (Conda env: $MINICLAW_ENV)"
+echo "Frontend: port 3000"
 echo "========================================"
 echo ""
 
-# 启动后端（后台）
-cd ../backend
-python3 -m uvicorn app:app --port 8002 --host 0.0.0.0 --reload &
+cleanup() {
+  echo ""
+  echo "[INFO] Shutting down..."
+  if [ -n "${BACKEND_PID:-}" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+    kill "$BACKEND_PID" 2>/dev/null || true
+  fi
+  if [ -n "${FRONTEND_PID:-}" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    kill "$FRONTEND_PID" 2>/dev/null || true
+  fi
+  echo "[INFO] Goodbye."
+  exit 0
+}
+
+trap cleanup INT TERM
+
+cd "$SCRIPT_DIR/backend"
+python -m uvicorn app:app --port 8002 --host 0.0.0.0 --reload &
 BACKEND_PID=$!
 
-# 等待 2 秒
 sleep 2
 
-# 启动前端（后台）
-cd ../frontend
+cd "$SCRIPT_DIR/frontend"
 npm run dev &
 FRONTEND_PID=$!
 
 echo ""
 echo "========================================"
-echo "启动完成！"
+echo "Startup complete!"
 echo ""
-echo "本机访问: http://localhost:3000"
-echo "局域网访问: http://你的IP:3000"
+echo "Local:   http://localhost:3000"
+echo "LAN:     http://<YOUR_IP>:3000"
 echo ""
-echo "按 Ctrl+C 停止服务"
+echo "Note: Backend runs in Conda environment '$MINICLAW_ENV'."
+echo "Press Ctrl+C to stop both services."
 echo "========================================"
 
-# 等待任意进程结束
-wait $BACKEND_PID $FRONTEND_PID
+wait $BACKEND_PID $FRONTEND_PID 2>/dev/null || true

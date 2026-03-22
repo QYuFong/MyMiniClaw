@@ -27,6 +27,10 @@ class Config:
         self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
         
+        # Ollama 本地模型配置（优先使用）
+        self.ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.ollama_embedding_model = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3")
+        
         # 持久化配置
         self._persistent_config = self._load_config()
     

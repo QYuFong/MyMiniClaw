@@ -6,13 +6,42 @@
 
 ### 1. 环境要求
 
-- Python 3.10+
+- **Anaconda / Miniconda**（推荐）：后端使用名为 **`miniclaw`** 的 Conda 虚拟环境（Python **3.12**）
 - Node.js 18+
-- pip / npm
+- npm
 
-### 2. 后端配置
+若尚未创建该环境，在终端执行：
 
 ```bash
+conda create -n miniclaw python=3.12
+```
+
+激活后安装依赖并运行后端：
+
+```bash
+conda activate miniclaw
+```
+
+### 2. 一键启动（推荐）
+
+| 平台 | 脚本 | 说明 |
+|------|------|------|
+| Windows | `start.bat` | 检查 Conda / Node；若不存在 **miniclaw**，会自动执行 `conda create -n miniclaw python=3.12 -y`；随后在 **miniclaw** 中安装后端依赖并启动前后端 |
+| Linux / macOS | `start.sh` | 同上 |
+
+```bash
+# Windows（双击或在 cmd 中运行）
+start.bat
+
+# Linux / macOS
+chmod +x start.sh
+./start.sh
+```
+
+### 3. 手动配置后端（Conda：`miniclaw`）
+
+```bash
+conda activate miniclaw
 cd backend
 
 # 安装依赖
@@ -28,9 +57,9 @@ uvicorn app:app --port 8002 --host 0.0.0.0 --reload
 
 **重要**：请确保在 `.env` 文件中配置以下 API Keys：
 - `DEEPSEEK_API_KEY`: DeepSeek API Key（Agent 主模型）
-- `OPENAI_API_KEY`: OpenAI API Key（Embedding 模型，用于 RAG）
+- `OPENAI_API_KEY`: OpenAI 兼容 Embedding（RAG；可选配合本地 Ollama，见 `.env.example`）
 
-### 3. 前端配置
+### 4. 手动配置前端
 
 ```bash
 cd frontend
@@ -42,7 +71,7 @@ npm install
 npm run dev
 ```
 
-### 4. 访问应用
+### 5. 访问应用
 
 - 本机访问：http://localhost:3000
 - 局域网访问：http://<本机IP>:3000
@@ -94,8 +123,8 @@ System Prompt 由 6 个组件动态拼接：
 - **框架**: FastAPI + Uvicorn
 - **Agent 引擎**: LangChain 1.x
 - **LLM**: DeepSeek（通过 langchain-deepseek）
-- **RAG**: LlamaIndex Core
-- **Embedding**: OpenAI text-embedding-3-small
+- **RAG**: LlamaIndex Core（BM25 + 向量混合检索）
+- **Embedding**: 优先本地 Ollama（如 `bge-m3`），否则 OpenAI 兼容 API（见 `.env.example`）
 
 ### 前端
 

@@ -26,13 +26,20 @@ if not exist "%CONDA_ACTIVATE%" (
     exit /b 1
 )
 
-REM Check if miniclaw environment exists
+REM Ensure miniclaw environment exists (create if missing)
 call conda env list | findstr "miniclaw" >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Conda environment 'miniclaw' not found.
-    echo Please create it first: conda create -n miniclaw python=3.12
-    pause
-    exit /b 1
+    echo [INFO] Conda environment 'miniclaw' not found.
+    echo [INFO] Creating environment: conda create -n miniclaw python=3.12 -y
+    call conda create -n miniclaw python=3.12 -y
+    if errorlevel 1 (
+        echo [ERROR] Failed to create Conda environment 'miniclaw'.
+        pause
+        exit /b 1
+    )
+    echo [INFO] Environment 'miniclaw' created successfully.
+) else (
+    echo [INFO] Conda environment 'miniclaw' found.
 )
 
 REM Check Node.js

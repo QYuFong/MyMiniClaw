@@ -11,9 +11,11 @@ ENV/
 
 # Backend specific
 backend/.env
+backend/memory
 backend/sessions/*.json
 backend/sessions/archive/*.json
 backend/storage/
+backend/debug.log
 
 # Node
 node_modules/
