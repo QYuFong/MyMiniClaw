@@ -33,13 +33,19 @@ class SessionManager:
         return data.get("messages", [])
     
     def load_session_for_agent(self, session_id: str) -> List[Dict[str, Any]]:
-        """加载会话消息，为 LLM 优化：合并连续 assistant 消息、注入压缩摘要
+        """加载会话消息，为 LLM 优化：保留完整的消息角色结构
+        
+        消息角色流转规则：
+        - 单工具调用：user → assistant(带tool_call) → tool → assistant(融合答复)
+        - 多工具调用：user → (assistant(带tool_call) → tool) × n → assistant(融合答复)
+        
+        压缩后的会话：messages 只包含一条 assistant 摘要消息
         
         Args:
             session_id: 会话 ID
             
         Returns:
-            优化后的消息列表
+            消息列表
         """
         session_file = self.sessions_dir / f"{session_id}.json"
         
@@ -49,48 +55,22 @@ class SessionManager:
         data = self._read_file(session_file)
         messages = data.get("messages", [])
         
-        # 合并连续的 assistant 消息
-        merged_messages = []
-        i = 0
-        while i < len(messages):
-            msg = messages[i]
-            
-            if msg["role"] == "assistant":
-                # 收集连续的 assistant 消息
-                assistant_segments = [msg["content"]]
-                tool_calls = msg.get("tool_calls", [])
-                
-                j = i + 1
-                while j < len(messages) and messages[j]["role"] == "assistant":
-                    assistant_segments.append(messages[j]["content"])
-                    tool_calls.extend(messages[j].get("tool_calls", []))
-                    j += 1
-                
-                # 合并为一条消息
-                merged_msg = {
-                    "role": "assistant",
-                    "content": "\n\n".join(assistant_segments)
-                }
-                if tool_calls:
-                    merged_msg["tool_calls"] = tool_calls
-                
-                merged_messages.append(merged_msg)
-                i = j
-            else:
-                merged_messages.append(msg)
-                i += 1
+        # 保留完整的消息结构
+        result_messages = []
+        for msg in messages:
+            result_messages.append(msg.copy())
         
-        # 注入压缩摘要
+        # 兼容旧格式：如果存在 compressed_context，将其作为首条摘要消息注入
+        # 新格式下 compressed_context 应为空
         compressed_context = data.get("compressed_context", "")
         if compressed_context:
-            # 在消息列表头部插入摘要
             summary_msg = {
                 "role": "assistant",
                 "content": f"[以下是之前对话的摘要]\n\n{compressed_context}"
             }
-            merged_messages.insert(0, summary_msg)
+            result_messages.insert(0, summary_msg)
         
-        return merged_messages
+        return result_messages
     
     def save_message(
         self,
@@ -103,9 +83,9 @@ class SessionManager:
         
         Args:
             session_id: 会话 ID
-            role: 消息角色（user/assistant）
+            role: 消息角色（user/assistant/tool）
             content: 消息内容
-            tool_calls: 工具调用列表
+            tool_calls: 工具调用列表（仅 assistant 角色使用）
         """
         session_file = self.sessions_dir / f"{session_id}.json"
         
@@ -127,6 +107,49 @@ class SessionManager:
         }
         if tool_calls:
             message["tool_calls"] = tool_calls
+        
+        # 追加消息
+        data["messages"].append(message)
+        data["updated_at"] = time.time()
+        
+        # 保存
+        self._write_file(session_file, data)
+    
+    def save_tool_message(
+        self,
+        session_id: str,
+        tool_call_id: str,
+        name: str,
+        content: str
+    ) -> None:
+        """保存工具执行结果消息
+        
+        Args:
+            session_id: 会话 ID
+            tool_call_id: 工具调用 ID
+            name: 工具名称
+            content: 工具输出内容
+        """
+        session_file = self.sessions_dir / f"{session_id}.json"
+        
+        # 读取现有数据
+        if session_file.exists():
+            data = self._read_file(session_file)
+        else:
+            data = {
+                "title": "新对话",
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "messages": []
+            }
+        
+        # 构建 tool 消息
+        message = {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "content": content
+        }
         
         # 追加消息
         data["messages"].append(message)
@@ -159,7 +182,7 @@ class SessionManager:
         summary: str,
         num_messages: int
     ) -> None:
-        """压缩历史消息
+        """压缩历史消息（归档部分消息）
         
         Args:
             session_id: 会话 ID
@@ -198,6 +221,52 @@ class SessionManager:
             data["compressed_context"] = summary
         
         data["messages"] = remaining_messages
+        data["updated_at"] = time.time()
+        
+        self._write_file(session_file, data)
+    
+    def replace_with_summary(
+        self,
+        session_id: str,
+        summary: str
+    ) -> None:
+        """将所有消息替换为一条 assistant 摘要消息
+        
+        用于完全压缩对话历史，保留用户提问和核心上下文
+        压缩后 messages 只保留一条 assistant 消息，内容是摘要
+        
+        Args:
+            session_id: 会话 ID
+            summary: 压缩摘要内容
+        """
+        session_file = self.sessions_dir / f"{session_id}.json"
+        
+        if not session_file.exists():
+            return
+        
+        data = self._read_file(session_file)
+        original_messages = data.get("messages", [])
+        
+        # 归档原始消息
+        timestamp = int(time.time())
+        archive_file = self.archive_dir / f"{session_id}_{timestamp}.json"
+        self._write_file(archive_file, {
+            "session_id": session_id,
+            "archived_at": timestamp,
+            "messages": original_messages,
+            "compressed_context": data.get("compressed_context", "")  # 同时归档之前的压缩上下文
+        })
+        
+        # 用一条 assistant 摘要消息替换所有消息
+        data["messages"] = [
+            {
+                "role": "assistant",
+                "content": summary
+            }
+        ]
+        
+        # 清空 compressed_context（摘要已经在 messages 里了）
+        data["compressed_context"] = ""
         data["updated_at"] = time.time()
         
         self._write_file(session_file, data)

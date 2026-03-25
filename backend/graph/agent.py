@@ -78,8 +78,10 @@ class AgentManager:
             - {"type": "token", "content": str}
             - {"type": "tool_start", "tool": str, "input": str}
             - {"type": "tool_end", "tool": str, "output": str}
+            - {"type": "tool_message", "tool": str, "tool_call_id": str, "output": str}
+            - {"type": "assistant_message", "content": str, "tool_calls": List}
             - {"type": "new_response", "segment": int}
-            - {"type": "done", "content": str}
+            - {"type": "done", "content": str, "messages": List}
         """
         logger.info(f"\n{'='*60}")
         logger.info(f"[AGENT] 收到用户消息: {message}")
@@ -128,6 +130,7 @@ class AgentManager:
         # ReAct Agent 循环：最多执行 5 轮
         max_iterations = 5
         full_response = ""
+        generated_messages = []  # 记录本次对话生成的所有消息
         
         for iteration in range(max_iterations):
             logger.info(f"\n{'='*60}")
@@ -201,6 +204,28 @@ class AgentManager:
                 )
                 messages.append(ai_message_with_tools)
                 
+                # 记录 assistant 消息（带 tool_calls）
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": current_response,
+                    "tool_calls": [
+                        {
+                            "id": tc.get('id', ''),
+                            "name": tc.get('name', ''),
+                            "args": tc.get('args', {})
+                        }
+                        for tc in tool_calls
+                    ]
+                }
+                generated_messages.append(assistant_msg)
+                
+                # 通知前端 assistant 消息（带 tool_calls）
+                yield {
+                    "type": "assistant_message",
+                    "content": current_response,
+                    "tool_calls": assistant_msg["tool_calls"]
+                }
+                
                 for tool_call in tool_calls:
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('args', {})
@@ -244,6 +269,23 @@ class AgentManager:
                         tool_call_id=tool_call_id
                     ))
                     
+                    # 记录 tool 消息
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": tool_output
+                    }
+                    generated_messages.append(tool_msg)
+                    
+                    # 通知前端 tool 消息
+                    yield {
+                        "type": "tool_message",
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "output": tool_output
+                    }
+                    
                     full_response += f"\n\n[Tool: {tool_name}]\nInput: {tool_input}\nOutput: {tool_output}\n\n"
                 
                 # 通知前端新的响应段开始
@@ -264,10 +306,32 @@ class AgentManager:
                 if parsed_tool_call:
                     tool_name = parsed_tool_call["tool"]
                     tool_input = parsed_tool_call["input"]
+                    fake_tool_call_id = f"text_parse_{iteration}_{tool_name}"
                     
                     logger.info(f"[TOOL] ✓ 检测到文本格式工具调用")
                     logger.info(f"[TOOL] 工具名称: {tool_name}")
                     logger.info(f"[TOOL] 工具输入: {tool_input}")
+                    
+                    # 记录 assistant 消息（带模拟的 tool_calls）
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": current_response,
+                        "tool_calls": [
+                            {
+                                "id": fake_tool_call_id,
+                                "name": tool_name,
+                                "args": {"input": tool_input}
+                            }
+                        ]
+                    }
+                    generated_messages.append(assistant_msg)
+                    
+                    # 通知前端 assistant 消息
+                    yield {
+                        "type": "assistant_message",
+                        "content": current_response,
+                        "tool_calls": assistant_msg["tool_calls"]
+                    }
                     
                     # 通知前端工具调用开始
                     yield {
@@ -293,6 +357,23 @@ class AgentManager:
                     messages.append(AIMessage(content=current_response))
                     messages.append(HumanMessage(content=f"[工具执行结果]\n工具: {tool_name}\n输出:\n{tool_output}\n\n请根据以上工具输出继续回答。"))
                     
+                    # 记录 tool 消息
+                    tool_msg = {
+                        "role": "tool",
+                        "tool_call_id": fake_tool_call_id,
+                        "name": tool_name,
+                        "content": tool_output
+                    }
+                    generated_messages.append(tool_msg)
+                    
+                    # 通知前端 tool 消息
+                    yield {
+                        "type": "tool_message",
+                        "tool": tool_name,
+                        "tool_call_id": fake_tool_call_id,
+                        "output": tool_output
+                    }
+                    
                     # 通知前端新的响应段开始
                     yield {
                         "type": "new_response",
@@ -308,16 +389,34 @@ class AgentManager:
             # 没有工具调用，对话完成
             logger.info(f"[TOOL] ✗ 未检测到工具调用")
             logger.info(f"[AGENT] 对话完成，无需进一步工具调用")
+            
+            # 记录最终的 assistant 融合答复消息
+            if current_response.strip():
+                final_assistant_msg = {
+                    "role": "assistant",
+                    "content": current_response
+                }
+                generated_messages.append(final_assistant_msg)
+                
+                # 通知前端最终的 assistant 消息
+                yield {
+                    "type": "assistant_message",
+                    "content": current_response,
+                    "tool_calls": []
+                }
+            
             break
         
         # 完成
         logger.info(f"\n{'='*60}")
         logger.info(f"[AGENT] 对话完成，总响应长度: {len(full_response)} 字符")
+        logger.info(f"[AGENT] 生成的消息数量: {len(generated_messages)}")
         logger.info(f"{'='*60}\n")
         
         yield {
             "type": "done",
-            "content": full_response
+            "content": full_response,
+            "messages": generated_messages
         }
     
     def _build_tools_prompt(self) -> str:
@@ -468,6 +567,11 @@ INPUT: skills/get_weather/SKILL.md
     ) -> List[Any]:
         """将历史消息转换为 LangChain 消息对象
         
+        支持的消息角色：
+        - user: 用户消息 → HumanMessage
+        - assistant: 助手消息 → AIMessage（可能带 tool_calls）
+        - tool: 工具执行结果 → ToolMessage
+        
         Args:
             history: 历史消息
             current_message: 当前用户消息
@@ -479,13 +583,31 @@ INPUT: skills/get_weather/SKILL.md
         
         # 转换历史消息
         for msg in history:
-            role = msg["role"]
-            content = msg["content"]
+            role = msg.get("role", "")
+            content = msg.get("content", "")
             
             if role == "user":
                 messages.append(HumanMessage(content=content))
             elif role == "assistant":
-                messages.append(AIMessage(content=content))
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    # 带 tool_calls 的 assistant 消息
+                    # 转换为 LangChain 格式的 tool_calls
+                    lc_tool_calls = [
+                        {
+                            "id": tc.get("id", ""),
+                            "name": tc.get("name", ""),
+                            "args": tc.get("args", {})
+                        }
+                        for tc in tool_calls
+                    ]
+                    messages.append(AIMessage(content=content, tool_calls=lc_tool_calls))
+                else:
+                    messages.append(AIMessage(content=content))
+            elif role == "tool":
+                # 工具执行结果消息
+                tool_call_id = msg.get("tool_call_id", "")
+                messages.append(ToolMessage(content=content, tool_call_id=tool_call_id))
         
         # 添加当前消息
         messages.append(HumanMessage(content=current_message))

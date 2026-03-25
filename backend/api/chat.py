@@ -68,9 +68,6 @@ async def event_generator(
         # 流式调用 Agent
         log_to_file(f"[API] 开始调用 Agent.astream...")
         full_content = ""
-        segments = []
-        current_segment = ""
-        segment_tool_calls = []
         
         async for event in agent_manager.astream(message, history):
             event_type = event["type"]
@@ -83,64 +80,55 @@ async def event_generator(
             elif event_type == "token":
                 # Token 流
                 content = event["content"]
-                current_segment += content
                 full_content += content
                 yield f"event: token\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             
             elif event_type == "tool_start":
                 # 工具调用开始
                 yield f"event: tool_start\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                segment_tool_calls.append({
-                    "tool": event["tool"],
-                    "input": event["input"],
-                    "output": ""
-                })
             
             elif event_type == "tool_end":
                 # 工具调用结束
                 yield f"event: tool_end\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if segment_tool_calls:
-                    segment_tool_calls[-1]["output"] = event["output"]
+            
+            elif event_type == "assistant_message":
+                # assistant 消息（可能带 tool_calls）- 用于前端展示，不在这里保存
+                yield f"event: assistant_message\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            
+            elif event_type == "tool_message":
+                # tool 消息 - 用于前端展示，不在这里保存
+                yield f"event: tool_message\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             
             elif event_type == "new_response":
                 # 新的响应段开始
-                # 保存上一段
-                if current_segment.strip():
-                    segments.append({
-                        "content": current_segment,
-                        "tool_calls": segment_tool_calls.copy()
-                    })
-                
-                # 重置当前段
-                current_segment = ""
-                segment_tool_calls = []
-                
                 yield f"event: new_response\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
             
             elif event_type == "done":
                 # 响应完成
-                # 保存最后一段
-                if current_segment.strip() or segment_tool_calls:
-                    segments.append({
-                        "content": current_segment,
-                        "tool_calls": segment_tool_calls
-                    })
+                # 从 agent 返回的 messages 列表中保存所有消息
+                generated_messages = event.get("messages", [])
+                log_to_file(f"[API] 收到 {len(generated_messages)} 条生成的消息")
                 
-                # 如果没有分段，使用完整内容
-                if not segments:
-                    segments.append({
-                        "content": event["content"],
-                        "tool_calls": []
-                    })
-                
-                # 保存所有段到会话
-                for segment in segments:
-                    agent_manager.session_manager.save_message(
-                        session_id,
-                        "assistant",
-                        segment["content"],
-                        segment["tool_calls"] if segment["tool_calls"] else None
-                    )
+                for msg in generated_messages:
+                    role = msg.get("role", "assistant")
+                    content = msg.get("content", "")
+                    
+                    if role == "assistant":
+                        tool_calls = msg.get("tool_calls")
+                        agent_manager.session_manager.save_message(
+                            session_id,
+                            "assistant",
+                            content,
+                            tool_calls if tool_calls else None
+                        )
+                    elif role == "tool":
+                        # 保存 tool 消息
+                        agent_manager.session_manager.save_tool_message(
+                            session_id,
+                            tool_call_id=msg.get("tool_call_id", ""),
+                            name=msg.get("name", ""),
+                            content=content
+                        )
                 
                 yield f"event: done\ndata: {json.dumps({'content': full_content, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             
