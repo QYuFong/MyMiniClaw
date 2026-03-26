@@ -5,7 +5,7 @@ import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
 
 export default function ChatPanel() {
-  const { messages, currentSessionId } = useApp();
+  const { messages, currentSessionId, isCompressing } = useApp();
   
   return (
     <div className="h-full flex flex-col bg-gradient-to-br from-white to-gray-50">
@@ -34,6 +34,14 @@ export default function ChatPanel() {
           </div>
         )}
       </div>
+
+      {currentSessionId && isCompressing && (
+        <div className="border-t border-amber-200 bg-amber-50">
+          <div className="max-w-4xl mx-auto px-6 py-3 text-sm text-amber-700">
+            正在压缩对话历史，请稍后...
+          </div>
+        </div>
+      )}
       
       {/* 输入框 */}
       {currentSessionId && (

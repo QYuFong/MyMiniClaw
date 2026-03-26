@@ -16,6 +16,7 @@ interface AppState {
   currentSessionId: string | null;
   messages: Message[];
   isStreaming: boolean;
+  isCompressing: boolean;
   
   // UI 状态
   leftPanelWidth: number;
@@ -51,6 +52,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   
   const [leftPanelWidth, setLeftPanelWidth] = useState(280);
   const [rightPanelWidth, setRightPanelWidth] = useState(400);
@@ -198,14 +200,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   
   // 压缩当前会话
   const compressCurrentSession = async () => {
-    if (!currentSessionId) return;
+    if (!currentSessionId || isCompressing) return;
     
     try {
+      setIsCompressing(true);
       await api.compressSession(currentSessionId);
       await switchSession(currentSessionId);
     } catch (error) {
       console.error('Failed to compress session:', error);
       alert('压缩失败：' + error);
+    } finally {
+      setIsCompressing(false);
     }
   };
   
@@ -259,6 +264,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     currentSessionId,
     messages,
     isStreaming,
+    isCompressing,
     
     leftPanelWidth,
     rightPanelWidth,
