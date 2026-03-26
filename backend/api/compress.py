@@ -1,6 +1,8 @@
 """对话压缩 API"""
+import json
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 from graph.agent import agent_manager
 from langchain_deepseek import ChatDeepSeek
@@ -8,6 +10,73 @@ import config as global_config
 
 
 router = APIRouter()
+
+
+def _get_memory_paths() -> Tuple[Path, Path]:
+    """获取记忆相关文件路径。"""
+    base_dir = Path(__file__).resolve().parent.parent
+    memory_dir = base_dir / "memory"
+    return memory_dir / "BuildMemoryPrompt.md", memory_dir / "MEMORY.md"
+
+
+def _load_text_file(path: Path) -> str:
+    """读取文本文件内容。"""
+    if not path.exists():
+        raise HTTPException(status_code=500, detail=f"文件不存在: {path}")
+    return path.read_text(encoding="utf-8")
+
+
+def _save_text_file(path: Path, content: str) -> None:
+    """写入文本文件内容。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+async def _evolve_memory(session_messages: List[Dict[str, Any]]) -> str:
+    """基于会话消息与历史 MEMORY.md 生成并回写最新长期记忆。"""
+    build_prompt_path, memory_path = _get_memory_paths()
+    memory_system_prompt = _load_text_file(build_prompt_path).strip()
+    previous_memory = _load_text_file(memory_path).strip()
+
+    # 严格按照需求组织传给模型的消息结构：
+    # messages = [
+    #   {"role": "system", "content": BuildMemoryPrompt.md 内容},
+    #   {"role": "user", "content": [会话 message 列表, 上一次长期记忆内容]}
+    # ]
+    memory_messages = [
+        {
+            "role": "system",
+            "content": memory_system_prompt
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                [session_messages, previous_memory],
+                ensure_ascii=False,
+                indent=2
+            )
+        }
+    ]
+
+    llm = ChatDeepSeek(
+        model=global_config.config.deepseek_model,
+        api_key=global_config.config.deepseek_api_key,
+        base_url=global_config.config.deepseek_base_url,
+        temperature=0.1,
+    )
+
+    response = await llm.ainvoke(memory_messages)
+    latest_memory = response.content.strip()
+    if not latest_memory:
+        raise HTTPException(status_code=500, detail="记忆提取失败：模型返回为空")
+
+    _save_text_file(memory_path, latest_memory)
+
+    # 记忆文件更新后，重建索引，确保后续检索使用最新记忆
+    if agent_manager.memory_indexer:
+        agent_manager.memory_indexer.rebuild_index()
+
+    return latest_memory
 
 
 def _format_messages_for_compression(messages: List[Dict[str, Any]]) -> str:
@@ -114,6 +183,9 @@ async def compress_session(session_id: str) -> Dict[str, Any]:
     if len(messages) < 4:
         raise HTTPException(status_code=400, detail="消息数量不足，无法压缩（至少需要 4 条消息）")
     
+    # 先执行记忆自演进：从会话消息提取长期记忆并更新 MEMORY.md
+    latest_memory = await _evolve_memory(messages)
+
     # 格式化消息用于压缩
     conversation_text = _format_messages_for_compression(messages)
     
@@ -157,5 +229,7 @@ async def compress_session(session_id: str) -> Dict[str, Any]:
     return {
         "original_count": len(messages),
         "compressed_to": 1,
-        "summary": summary
+        "summary": summary,
+        "memory_updated": True,
+        "memory_preview": latest_memory[:300] + "..." if len(latest_memory) > 300 else latest_memory
     }

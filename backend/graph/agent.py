@@ -127,8 +127,8 @@ class AgentManager:
         messages = self._build_messages(history, message)
         logger.info(f"[AGENT] 构建的消息列表长度: {len(messages)}")
         
-        # ReAct Agent 循环：最多执行 5 轮
-        max_iterations = 5
+        # ReAct Agent 循环：最多执行 10 轮
+        max_iterations = 10
         full_response = ""
         generated_messages = []  # 记录本次对话生成的所有消息
         
