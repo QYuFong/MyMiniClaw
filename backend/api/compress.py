@@ -10,6 +10,7 @@ import config as global_config
 
 
 router = APIRouter()
+SUMMARY_PREFIX = "以下是前轮对话的信息摘要："
 
 
 def _get_memory_paths() -> Tuple[Path, Path]:
@@ -167,6 +168,14 @@ def _format_messages_for_compression(messages: List[Dict[str, Any]]) -> str:
     return "\n\n".join(formatted_parts)
 
 
+def _ensure_summary_prefix(summary: str) -> str:
+    """确保压缩摘要带有固定前缀，便于前端做稳定渲染判断。"""
+    normalized = summary.strip()
+    if normalized.startswith(SUMMARY_PREFIX):
+        return normalized
+    return f"{SUMMARY_PREFIX}\n{normalized}"
+
+
 @router.post("/sessions/{session_id}/compress")
 async def compress_session(session_id: str) -> Dict[str, Any]:
     """压缩对话历史
@@ -218,7 +227,7 @@ async def compress_session(session_id: str) -> Dict[str, Any]:
     )
     
     response = await llm.ainvoke(prompt)
-    summary = response.content.strip()
+    summary = _ensure_summary_prefix(response.content)
     
     # 完全替换消息列表（而不是归档部分消息）
     agent_manager.session_manager.replace_with_summary(

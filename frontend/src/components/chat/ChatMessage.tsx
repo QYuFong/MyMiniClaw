@@ -5,6 +5,8 @@ import { User, Bot } from 'lucide-react';
 import ThoughtChain from './ThoughtChain';
 import RetrievalCard from './RetrievalCard';
 
+const SUMMARY_PREFIX = '以下是前轮对话的信息摘要：';
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -26,9 +28,43 @@ interface ChatMessageProps {
   message: Message;
 }
 
+function stripBoundarySeparators(content: string): string {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+
+  while (lines.length > 0 && /^\s*---\s*$/.test(lines[0])) {
+    lines.shift();
+  }
+  while (lines.length > 0 && /^\s*---\s*$/.test(lines[lines.length - 1])) {
+    lines.pop();
+  }
+
+  return lines.join('\n').trim();
+}
+
+function isPlainTextContent(content: string): boolean {
+  const markdownPatterns = [
+    /```[\s\S]*?```/, // fenced code
+    /^\s{0,3}#{1,6}\s+/m, // heading
+    /\*\*[^*]+\*\*|__[^_]+__/, // bold
+    /`[^`]+`/, // inline code
+    /\[[^\]]+\]\([^)]+\)/, // link
+    /^\s*>\s+/m, // blockquote
+    /^\s*([-*+]|\d+\.)\s+/m, // list
+    /^\s*\|.+\|\s*$/m, // table
+    /^[-*_]{3,}\s*$/m, // hr
+  ];
+  return !markdownPatterns.some((pattern) => pattern.test(content));
+}
+
 export default function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user';
-  
+  const normalizedContent = stripBoundarySeparators(message.content || '');
+  const looksLikeCompressedSummary = normalizedContent
+    .trimStart()
+    .startsWith(SUMMARY_PREFIX);
+  const usePlainTextRender =
+    looksLikeCompressedSummary || isPlainTextContent(normalizedContent);
+
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`flex space-x-3 max-w-3xl ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`}>
@@ -63,7 +99,13 @@ export default function ChatMessage({ message }: ChatMessageProps) {
                 : 'bg-white border border-gray-200 shadow-sm'
             }`}>
               <div className={`markdown ${isUser ? 'text-white' : 'text-gray-800'}`}>
-                <ReactMarkdown>{message.content}</ReactMarkdown>
+                {usePlainTextRender ? (
+                  <div className="whitespace-pre-wrap break-words text-base font-normal">
+                    {normalizedContent}
+                  </div>
+                ) : (
+                  <ReactMarkdown>{normalizedContent}</ReactMarkdown>
+                )}
               </div>
               
               {message.isStreaming && (
