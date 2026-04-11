@@ -9,18 +9,7 @@ export default function Navbar() {
           mini OpenClaw
         </div>
       </div>
-      
-      {/* 右侧链接 */}
-      <div>
-        <a
-          href="https://fufan.ai"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm text-gray-600 hover:text-klein-blue transition-colors"
-        >
-          赋范空间
-        </a>
-      </div>
+
     </nav>
   );
 }

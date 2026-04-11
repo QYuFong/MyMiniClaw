@@ -38,7 +38,7 @@
 
     - RAG 检索模式
 
-    - 对话压缩
+    - 对话压缩与自演进记忆系统
 
 - 关键设计决策
 
@@ -101,7 +101,9 @@ mini-OpenClaw/
 │   │
 │   ├── skills/                      # 技能目录（每个技能一个子目录）
 │   │   └── get_weather/SKILL.md     #   示例：天气查询技能
-│   ├── memory/MEMORY.md             # 跨会话长期记忆
+│   ├── memory/                      # 跨会话长期记忆
+│   │   ├── MEMORY.md                #   长期记忆存储文件
+│   │   └── BuildMemoryPrompt.md     #   记忆提取提示模板（自演进系统）
 │   ├── knowledge/                   # 知识库文档（供 RAG 检索）
 │   ├── sessions/                    # 会话 JSON 文件
 │   │   └── archive/                 #   压缩归档
@@ -253,6 +255,19 @@ RAG 模式下的变化：跳过 [MEMORY.md](MEMORY.md)，改为追加一段 RAG 
 |retrieve(query, top_k=3)|语义检索，返回 [{text, score, source}]|
 |_maybe_rebuild()|每次检索前通过 MD5 检查文件是否变更，变更则自动重建|
 另外，当用户通过 Monaco 编辑器保存 [MEMORY.md](MEMORY.md) 时，[files.py](files.py) 的 save_file 端点也会主动触发 rebuild_index()。
+
+#### [BuildMemoryPrompt.md](BuildMemoryPrompt.md) — 自演进记忆提取提示模板
+
+记忆提取系统的核心提示文件，定义了长期记忆的提取规则、范围限制与输出格式。
+
+**核心职责**：
+
+- 规定允许提取的 5 类核心内容（用户身份、偏好、目标、知识边界、价值观）
+- 列出绝对禁止提取的红线内容（单次临时上下文、敏感隐私、低价值闲聊等）
+- 定义记忆增量更新规则（存量校验、新增添加、失效剔除、冲突处理）
+- 强制 Markdown 输出格式（用户信息 / 重要事件 / 长期目标 / 其他备注）
+
+每次对话压缩时，[compress.py](compress.py) 读取此文件构建记忆提取请求，调用 DeepSeek 从会话消息中提取长期记忆并更新 [MEMORY.md](MEMORY.md)。
 
 ### 五大核心工具 tools/
 
@@ -459,7 +474,7 @@ description: 查询指定城市的天气信息
 ```Plain Text
 
 ┌──────────────────────────────────────────────────────────┐
-│  Navbar（mini OpenClaw / 赋范空间）                        │
+│  Navbar（mini OpenClaw）                        │
 ├──────────┬──────────────────────────┬────────────────────┤
 │ Sidebar  │       ChatPanel          │  InspectorPanel    │
 │          │                          │                    │
@@ -540,22 +555,54 @@ description: 查询指定城市的天气信息
                             └─ RetrievalCard 渲染紫色折叠卡片
 ```
 
-### 对话压缩
+### 对话压缩与自演进记忆系统
 
 ```Plain Text
 
 用户点击扳手 ──→ 确认弹窗 ──→ POST /api/sessions/{id}/compress
                                 │
+                                ├─ 【自演进记忆提取】
+                                │   ├─ 读取 BuildMemoryPrompt.md（记忆提取提示模板）
+                                │   ├─ 读取 MEMORY.md（上一版长期记忆）
+                                │   ├─ 构建记忆提取请求：
+                                │   │   messages = [
+                                │   │     {role: "system", content: BuildMemoryPrompt.md},
+                                │   │     {role: "user", content: [会话消息列表, 上一版记忆]}
+                                │   │   ]
+                                │   ├─ 调用 DeepSeek（temperature=0.1）提取长期记忆
+                                │   ├─ 更新 MEMORY.md 文件
+                                │   └─ 触发 memory_indexer.rebuild_index() 重建索引
+                                │
                                 ├─ 取前 50% 消息（≥4 条）
-                                ├─ DeepSeek 生成中文摘要（≤500字）
+                                ├─ DeepSeek 生成中文摘要（≤500字，带固定前缀）
                                 ├─ 归档到 sessions/archive/
                                 ├─ 从 session 中删除这些消息
                                 └─ 摘要写入 compressed_context
+                                
+前端显示压缩状态 ──→ isCompressing = true → 显示加载动画
+压缩完成 ──→ 显示记忆更新预览（前300字符）
 
 下次调用 Agent ──→ load_session_for_agent()
                     └─ 在消息列表头部插入:
                        {"role": "assistant", "content": "[以下是之前对话的摘要]\n{摘要}"}
 ```
+
+**自演进记忆系统核心机制**：
+
+- **触发时机**：每次对话压缩时自动执行
+- **记忆提取范围**（仅提取以下 5 类信息）：
+  1. 用户核心身份与基础属性（姓名、职业、地区、技术栈等）
+  2. 用户交互偏好与行为模式（沟通风格、输出偏好、禁忌红线）
+  3. 用户长期目标与持续任务（跨会话项目、待办事项）
+  4. 用户知识边界与经验教训（已解决问题、踩过的坑）
+  5. 用户价值观与核心诉求
+- **绝对禁止提取**：单次临时上下文、高敏感隐私、低价值闲聊、易过期信息、主观推测
+- **增量更新规则**：存量记忆校验更新、新增记忆合规添加、失效记忆精准剔除、冲突时以最新表述为准
+- **输出格式**：严格遵循 MEMORY.md 的 Markdown 结构（用户信息 / 重要事件 / 长期目标 / 其他备注）
+
+**前端压缩状态显示**：
+
+压缩过程中 `isCompressing` 状态为 `true`，前端显示加载动画，防止用户误操作。压缩完成后展示记忆更新预览。
 
 ## 关键设计决策
 
@@ -570,6 +617,9 @@ description: 查询指定城市的天气信息
 |RAG 检索结果不持久化|避免会话文件膨胀，检索上下文仅用于当次请求|
 |路径白名单 + 遍历检测|双重防护，终端和文件读取工具均受沙箱约束|
 |window.location.hostname 动态 API 地址|一份代码同时支持本机和局域网访问|
+|自演进记忆系统|压缩时自动提取用户偏好作为长期记忆，减少重复沟通，实现个性化服务的跨会话延续|
+|Agent 最大迭代轮数提升至 10|原 5 轮在复杂任务中易中断，提升至 10 轮保障多步骤任务的完整执行|
+|压缩摘要固定前缀|为前端提供稳定的渲染判断依据，统一摘要显示风格|
 ## API 接口速查
 
 |路径|方法|说明|
@@ -582,7 +632,7 @@ description: 查询指定城市的天气信息
 |/api/sessions/{id}/messages|GET|获取完整消息（含 System Prompt）|
 |/api/sessions/{id}/history|GET|获取对话历史|
 |/api/sessions/{id}/generate-title|POST|AI 生成标题|
-|/api/sessions/{id}/compress|POST|压缩对话历史|
+|/api/sessions/{id}/compress|POST|压缩对话历史（含自演进记忆提取）|
 |/api/files?path=...|GET|读取文件|
 |/api/files|POST|保存文件|
 |/api/skills|GET|列出技能|

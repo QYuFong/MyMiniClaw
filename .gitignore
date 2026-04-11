@@ -11,7 +11,7 @@ ENV/
 
 # Backend specific
 backend/.env
-backend/memory
+backend/memory/MEMORY.md
 backend/sessions/*.json
 backend/sessions/archive/*.json
 backend/storage/
@@ -25,6 +25,7 @@ dist/
 
 # IDE
 .vscode/
+.claude/
 .idea/
 .specstory/
 *.swp
