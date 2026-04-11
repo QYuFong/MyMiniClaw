@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useApp } from '@/lib/store';
 import dynamic from 'next/dynamic';
-import { FileText, Save, Folder } from 'lucide-react';
+import { FileText, Save, Folder, Wrench } from 'lucide-react';
 import React from 'react';
+import McpPanel from '@/components/mcp/McpPanel';
 
-// 动态导入 Monaco Editor（仅客户端）
 const Editor = dynamic(() => import('@monaco-editor/react'), {
   ssr: false,
   loading: () => (
@@ -16,12 +16,11 @@ const Editor = dynamic(() => import('@monaco-editor/react'), {
   ),
 });
 
-export default function InspectorPanel() {
+function EditorTab() {
   const { currentFile, currentFileContent, openFile, saveCurrentFile } = useApp();
   const [editorContent, setEditorContent] = useState('');
   const [hasChanges, setHasChanges] = useState(false);
   
-  // 预定义文件列表
   const files = [
     { path: 'memory/MEMORY.md', label: 'MEMORY.md', icon: '📝' },
     { path: 'workspace/SOUL.md', label: 'SOUL.md', icon: '🌟' },
@@ -41,7 +40,6 @@ export default function InspectorPanel() {
     setHasChanges(false);
   };
   
-  // 监听编辑器内容变化
   const handleEditorChange = (value: string | undefined) => {
     if (value !== undefined) {
       setEditorContent(value);
@@ -49,16 +47,15 @@ export default function InspectorPanel() {
     }
   };
   
-  // 当文件变化时，更新编辑器内容
   React.useEffect(() => {
     setEditorContent(currentFileContent);
     setHasChanges(false);
   }, [currentFileContent]);
   
   return (
-    <div className="h-full bg-white border-l border-gray-200 flex flex-col">
-      {/* 头部：文件列表 */}
-      <div className="border-b border-gray-200 p-4">
+    <div className="h-full flex flex-col">
+      {/* 文件列表 - 限制最大高度，超出时滚动 */}
+      <div className="border-b border-gray-200 p-4 shrink-0 max-h-[40%] overflow-y-auto">
         <div className="flex items-center space-x-2 mb-3">
           <Folder size={18} className="text-gray-600" />
           <span className="font-medium text-gray-700">文件</span>
@@ -86,8 +83,7 @@ export default function InspectorPanel() {
       <div className="flex-1 flex flex-col min-h-0">
         {currentFile ? (
           <>
-            {/* 文件名和保存按钮 */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50 shrink-0">
               <div className="flex items-center space-x-2">
                 <FileText size={16} className="text-gray-600" />
                 <span className="text-sm font-medium text-gray-700">
@@ -108,22 +104,24 @@ export default function InspectorPanel() {
               </button>
             </div>
             
-            {/* Monaco 编辑器 */}
-            <div className="flex-1">
-              <Editor
-                value={editorContent}
-                onChange={handleEditorChange}
-                language="markdown"
-                theme="light"
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 13,
-                  lineNumbers: 'on',
-                  wordWrap: 'on',
-                  scrollBeyondLastLine: false,
-                  automaticLayout: true,
-                }}
-              />
+            <div className="relative flex-1 min-h-0">
+              <div className="absolute inset-0">
+                <Editor
+                  height="100%"
+                  value={editorContent}
+                  onChange={handleEditorChange}
+                  language="markdown"
+                  theme="light"
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    lineNumbers: 'on',
+                    wordWrap: 'on',
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                  }}
+                />
+              </div>
             </div>
           </>
         ) : (
@@ -134,6 +132,46 @@ export default function InspectorPanel() {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+export default function InspectorPanel() {
+  const { inspectorTab, setInspectorTab } = useApp();
+  
+  const tabs = [
+    { id: 'editor' as const, label: '文件编辑器', icon: FileText },
+    { id: 'mcp' as const, label: 'MCP 配置', icon: Wrench },
+  ];
+  
+  return (
+    <div className="h-full bg-white border-l border-gray-200 flex flex-col">
+      {/* Tab 栏 */}
+      <div className="flex border-b border-gray-200">
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = inspectorTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setInspectorTab(tab.id)}
+              className={`flex-1 flex items-center justify-center space-x-1.5 px-3 py-2.5 text-sm font-medium transition-colors ${
+                isActive
+                  ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50/50'
+                  : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <Icon size={15} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      
+      {/* Tab 内容 */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        {inspectorTab === 'editor' ? <EditorTab /> : <McpPanel />}
       </div>
     </div>
   );

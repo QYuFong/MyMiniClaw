@@ -16,3 +16,4 @@ beautifulsoup4==4.12.3
 html2text==2024.2.26
 requests==2.32.3
 python-multipart==0.0.12
+mcp>=1.27.0

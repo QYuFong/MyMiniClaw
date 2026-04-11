@@ -39,9 +39,13 @@ conda activate miniclaw  # 必须步骤
 |------|------|
 | [backend/app.py](backend/app.py) | FastAPI 入口 |
 | [backend/graph/agent.py](backend/graph/agent.py) | Agent 主循环 |
-| [backend/tools/](backend/tools/) | 五大核心工具 |
+| [backend/tools/](backend/tools/) | 六大核心工具 |
+| [backend/tools/mcp_manager.py](backend/tools/mcp_manager.py) | MCP 连接管理器 |
+| [backend/tools/mcp_tool_wrapper.py](backend/tools/mcp_tool_wrapper.py) | MCP 工具包装器 |
+| [backend/mcp_servers.json](backend/mcp_servers.json) | MCP Server 配置 |
 | [backend/workspace/](backend/workspace/) | System Prompt 组件 |
 | [backend/skills/](backend/skills/) | 技能目录 |
+| [backend/api/mcp.py](backend/api/mcp.py) | MCP 管理 API |
 
 ### 开发约定
 

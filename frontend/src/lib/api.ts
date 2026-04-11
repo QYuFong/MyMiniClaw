@@ -250,3 +250,88 @@ export async function getSessionTokens(sessionId: string): Promise<{
   }
   return response.json();
 }
+
+// ==================== MCP API ====================
+
+export interface McpServerTool {
+  name: string;
+  description: string;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transport: 'stdio' | 'sse';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  status?: 'connected' | 'disconnected' | 'error' | 'disabled';
+  tools?: McpServerTool[];
+  error?: string | null;
+}
+
+export type McpServerInput = Omit<McpServer, 'id' | 'status' | 'tools' | 'error'>;
+
+export async function getMcpServers(): Promise<McpServer[]> {
+  const response = await fetch(`${API_BASE}/api/mcp/servers`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch MCP servers');
+  }
+  return response.json();
+}
+
+export async function addMcpServer(server: McpServerInput): Promise<McpServer> {
+  const response = await fetch(`${API_BASE}/api/mcp/servers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(server),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to add MCP server');
+  }
+  return response.json();
+}
+
+export async function updateMcpServer(id: string, updates: Partial<McpServerInput>): Promise<McpServer> {
+  const response = await fetch(`${API_BASE}/api/mcp/servers/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to update MCP server');
+  }
+  return response.json();
+}
+
+export async function deleteMcpServer(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/mcp/servers/${id}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to delete MCP server');
+  }
+}
+
+export async function toggleMcpServer(id: string): Promise<McpServer> {
+  const response = await fetch(`${API_BASE}/api/mcp/servers/${id}/toggle`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to toggle MCP server');
+  }
+  return response.json();
+}
+
+export async function reloadMcpServers(): Promise<{ tools_count: number; servers: McpServer[] }> {
+  const response = await fetch(`${API_BASE}/api/mcp/reload`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to reload MCP servers');
+  }
+  return response.json();
+}

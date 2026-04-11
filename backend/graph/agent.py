@@ -27,17 +27,20 @@ class AgentManager:
         self.prompt_builder: Optional[PromptBuilder] = None
         self.session_manager: Optional[SessionManager] = None
         self.memory_indexer: Optional[MemoryIndexer] = None
+        self.mcp_manager = None
     
-    def initialize(self, base_dir: Path) -> None:
+    def initialize(self, base_dir: Path, mcp_manager=None) -> None:
         """初始化 Agent
         
         Args:
             base_dir: 项目根目录
+            mcp_manager: MCP 连接管理器（可选）
         """
         self.base_dir = base_dir
+        self.mcp_manager = mcp_manager
         
-        # 加载工具
-        self.tools = get_all_tools(base_dir)
+        # 加载工具（内建 + MCP）
+        self.tools = get_all_tools(base_dir, mcp_manager)
         
         # 创建 LLM（绑定工具以支持 function calling）
         self.llm = ChatDeepSeek(
@@ -60,6 +63,19 @@ class AgentManager:
         self.prompt_builder = PromptBuilder(base_dir)
         self.session_manager = SessionManager(base_dir)
         self.memory_indexer = MemoryIndexer(base_dir)
+
+    def refresh_tools(self) -> None:
+        """刷新工具列表（MCP 热重载后调用）"""
+        if not self.base_dir:
+            return
+        self.tools = get_all_tools(self.base_dir, self.mcp_manager)
+        if self.llm:
+            try:
+                self.llm_with_tools = self.llm.bind_tools(self.tools)
+                logger.info(f"✓ 工具列表已刷新，共 {len(self.tools)} 个工具 (Function Calling 模式)")
+            except Exception:
+                logger.info(f"✓ 工具列表已刷新，共 {len(self.tools)} 个工具 (文本解析模式)")
+                self.llm_with_tools = None
     
     async def astream(
         self,
@@ -230,29 +246,34 @@ class AgentManager:
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('args', {})
                     tool_call_id = tool_call.get('id', '')
-                    
+
                     logger.info(f"[TOOL] 工具名称: {tool_name}")
                     logger.info(f"[TOOL] 工具参数: {tool_args}")
                     logger.info(f"[TOOL] Tool Call ID: {tool_call_id}")
-                    
-                    # 提取工具输入（通常是第一个参数值，如 query）
-                    if isinstance(tool_args, dict):
+
+                    # MCP 工具需要完整的参数字典，其他工具提取单个值
+                    if tool_name.startswith('mcp_'):
+                        # MCP 工具：传递完整参数字典
+                        tool_input = tool_args if isinstance(tool_args, dict) else {}
+                        logger.info(f"[TOOL] MCP 工具，保留完整参数: {tool_input}")
+                    elif isinstance(tool_args, dict):
+                        # 其他工具：提取第一个参数值（如 query, path, input 等）
                         tool_input = tool_args.get('query') or tool_args.get('path') or tool_args.get('input') or list(tool_args.values())[0] if tool_args else ""
                     else:
                         tool_input = str(tool_args)
-                    
+
                     logger.info(f"[TOOL] 工具输入 (处理后): {tool_input}")
-                    
+
                     # 通知前端工具调用开始
                     yield {
                         "type": "tool_start",
                         "tool": tool_name,
                         "input": str(tool_input)
                     }
-                    
+
                     # 执行工具
                     logger.info(f"[TOOL] 开始执行工具: {tool_name}")
-                    tool_output = await self._execute_tool(tool_name, str(tool_input))
+                    tool_output = await self._execute_tool(tool_name, tool_input)
                     logger.info(f"[TOOL] 工具执行完成，输出长度: {len(tool_output)} 字符")
                     logger.info(f"[TOOL] 工具输出:\n{'-'*60}\n{tool_output[:500]}...\n{'-'*60}")
                     
@@ -533,13 +554,13 @@ INPUT: skills/get_weather/SKILL.md
         logger.info(f"[PARSE] 文本预览: {text[:200]}...")
         return None
     
-    async def _execute_tool(self, tool_name: str, tool_input: str) -> str:
+    async def _execute_tool(self, tool_name: str, tool_input: Any) -> str:
         """执行工具
-        
+
         Args:
             tool_name: 工具名称
-            tool_input: 工具输入
-            
+            tool_input: 工具输入（可以是字符串或字典）
+
         Returns:
             工具输出
         """
@@ -549,16 +570,142 @@ INPUT: skills/get_weather/SKILL.md
             if t.name == tool_name:
                 tool = t
                 break
-        
+
         if not tool:
             return f"错误：工具 '{tool_name}' 不存在"
-        
+
         try:
+            # 参数校验和转换
+            validated_input = self._validate_tool_input(tool, tool_input)
+            if isinstance(validated_input, str) and validated_input.startswith("错误："):
+                # 校验失败，返回错误信息
+                return validated_input
+
             # 执行工具（同步）
-            result = tool._run(tool_input)
+            if isinstance(validated_input, dict):
+                result = tool._run(**validated_input)
+            else:
+                result = tool._run(validated_input)
             return result
         except Exception as e:
+            logger.error(f"[TOOL] 工具执行异常: {e}")
             return f"错误：工具执行失败 - {str(e)}"
+
+    def _validate_tool_input(self, tool: Any, tool_input: Any) -> Any:
+        """根据工具的 args_schema 校验和转换输入参数
+
+        Args:
+            tool: 工具对象
+            tool_input: 原始输入（可以是字符串、字典或其他类型）
+
+        Returns:
+            校验后的输入参数，或错误信息字符串
+        """
+        from pydantic import ValidationError
+
+        # 获取工具的 args_schema
+        args_schema = getattr(tool, 'args_schema', None)
+        tool_name = tool.name
+
+        # 如果没有 schema，直接返回原始输入
+        if args_schema is None:
+            logger.info(f"[VALIDATE] 工具 {tool_name} 无 args_schema，直接使用原始输入")
+            return tool_input
+
+        # 获取 schema 的字段定义
+        schema_fields = getattr(args_schema, '__fields__', {}) or getattr(args_schema, 'model_fields', {})
+        if not schema_fields:
+            logger.info(f"[VALIDATE] 工具 {tool_name} schema 无字段定义")
+            return tool_input
+
+        # 解析必需字段和可选字段
+        required_fields = []
+        optional_fields = []
+        field_types = {}
+
+        for field_name, field_info in schema_fields.items():
+            # Pydantic v1 和 v2 的字段信息结构不同
+            if hasattr(field_info, 'required'):
+                is_required = field_info.required
+            elif hasattr(field_info, 'is_required'):
+                is_required = field_info.is_required()
+            else:
+                # 默认根据是否有默认值判断
+                is_required = getattr(field_info, 'default', None) is None
+
+            if is_required:
+                required_fields.append(field_name)
+            else:
+                optional_fields.append(field_name)
+
+            # 获取字段类型
+            if hasattr(field_info, 'type_'):
+                field_types[field_name] = field_info.type_
+            elif hasattr(field_info, 'annotation'):
+                field_types[field_name] = field_info.annotation
+            else:
+                field_types[field_name] = str
+
+        logger.info(f"[VALIDATE] 工具 {tool_name} schema: 必需={required_fields}, 可选={optional_fields}")
+
+        # 将输入转换为字典
+        input_dict = {}
+        if isinstance(tool_input, dict):
+            input_dict = tool_input.copy()
+        elif isinstance(tool_input, str):
+            # 尝试解析字符串为 JSON
+            try:
+                parsed = json.loads(tool_input)
+                if isinstance(parsed, dict):
+                    input_dict = parsed
+                else:
+                    # 单值字符串，尝试匹配到第一个必需字段
+                    if required_fields:
+                        input_dict[required_fields[0]] = tool_input
+                    else:
+                        input_dict['input'] = tool_input
+            except json.JSONDecodeError:
+                # 不是 JSON，尝试匹配到第一个必需字段
+                if required_fields:
+                    input_dict[required_fields[0]] = tool_input
+                else:
+                    input_dict['input'] = tool_input
+        elif tool_input is not None:
+            # 其他类型，尝试匹配到第一个必需字段
+            if required_fields:
+                input_dict[required_fields[0]] = tool_input
+            else:
+                input_dict['input'] = tool_input
+
+        logger.info(f"[VALIDATE] 转换后的输入字典: {input_dict}")
+
+        # 检查必需字段
+        missing_fields = []
+        for field in required_fields:
+            if field not in input_dict or input_dict[field] is None:
+                missing_fields.append(field)
+
+        if missing_fields:
+            return f"错误：缺少必需参数 {missing_fields}。工具 {tool_name} 需要参数: {required_fields}"
+
+        # 尝试通过 Pydantic 模型验证
+        try:
+            validated = args_schema(**input_dict)
+            validated_dict = validated.dict() if hasattr(validated, 'dict') else validated.model_dump()
+            logger.info(f"[VALIDATE] ✓ 参数校验通过: {validated_dict}")
+            return validated_dict
+        except ValidationError as e:
+            # 解析验证错误，给出友好提示
+            error_messages = []
+            for error in e.errors():
+                field = error.get('loc', ['未知字段'])[-1]
+                msg = error.get('msg', '参数无效')
+                error_messages.append(f"参数 '{field}' {msg}")
+
+            return f"错误：参数校验失败 - {', '.join(error_messages)}"
+        except Exception as e:
+            logger.warning(f"[VALIDATE] Pydantic 验证异常: {e}，使用原始字典")
+            return input_dict
     
     def _build_messages(
         self,

@@ -1,5 +1,20 @@
 """FastAPI 应用入口"""
 import sys
+import asyncio
+
+# Windows 上 MCP stdio transport 需要 ProactorEventLoop 才能创建子进程。
+# uvicorn 会强制设置 WindowsSelectorEventLoopPolicy，这里需要拦截并保持 Proactor。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    _orig_set_event_loop_policy = asyncio.set_event_loop_policy
+
+    def _guard_proactor_policy(policy):
+        if policy is not None and "Selector" in type(policy).__name__:
+            return
+        _orig_set_event_loop_policy(policy)
+
+    asyncio.set_event_loop_policy = _guard_proactor_policy
+
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,8 +27,9 @@ import time
 import config as global_config
 from graph.agent import agent_manager
 from tools.skills_scanner import update_skills_snapshot
+from tools.mcp_manager import McpManager
 
-from api import chat, sessions, files, tokens, compress, config_api
+from api import chat, sessions, files, tokens, compress, config_api, mcp as mcp_api
 
 
 # 配置日志 - 同时输出到文件和控制台
@@ -57,10 +73,19 @@ async def lifespan(app: FastAPI):
     # 2. 扫描技能并生成快照
     update_skills_snapshot(base_dir)
     
-    # 3. 初始化 Agent
-    agent_manager.initialize(base_dir)
+    # 3. 初始化 MCP 连接
+    mcp_mgr = McpManager(base_dir)
+    try:
+        await mcp_mgr.connect_all()
+        print(f"✓ MCP 连接完成，加载了 {len(mcp_mgr.tools)} 个 MCP 工具")
+    except Exception as e:
+        print(f"⚠ MCP 连接部分失败: {e}")
+    app.state.mcp_manager = mcp_mgr
     
-    # 4. 构建 MEMORY.md 索引
+    # 4. 初始化 Agent（传入 mcp_manager）
+    agent_manager.initialize(base_dir, mcp_manager=mcp_mgr)
+    
+    # 5. 构建 MEMORY.md 索引
     print("正在构建 MEMORY.md 索引...")
     agent_manager.memory_indexer.rebuild_index()
     
@@ -73,6 +98,8 @@ async def lifespan(app: FastAPI):
     
     # 关闭时清理
     print("Mini-OpenClaw 正在关闭...")
+    await mcp_mgr.disconnect_all()
+    print("✓ MCP 连接已断开")
 
 
 # 创建应用
@@ -119,6 +146,7 @@ app.include_router(files.router, prefix="/api", tags=["Files"])
 app.include_router(tokens.router, prefix="/api", tags=["Tokens"])
 app.include_router(compress.router, prefix="/api", tags=["Compress"])
 app.include_router(config_api.router, prefix="/api", tags=["Config"])
+app.include_router(mcp_api.router, prefix="/api", tags=["MCP"])
 
 
 @app.get("/")

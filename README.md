@@ -130,7 +130,8 @@ mini-OpenClaw/
 │   │   ├── files.py                 #   文件读写 + 技能列表
 │   │   ├── tokens.py                #   Token 统计
 │   │   ├── compress.py              #   对话压缩
-│   │   └── config_api.py            #   RAG 模式开关
+│   │   ├── config_api.py            #   RAG 模式开关
+│   │   └── mcp.py                   #   MCP Server 管理
 │   │
 │   ├── graph/                       # Agent 核心逻辑
 │   │   ├── agent.py                 #   AgentManager — 构建 & 流式调用
@@ -138,14 +139,17 @@ mini-OpenClaw/
 │   │   ├── prompt_builder.py        #   System Prompt 组装器
 │   │   └── memory_indexer.py        #   MEMORY.md 向量索引（RAG）
 │   │
-│   ├── tools/                       # 5 个核心工具
+│   ├── tools/                       # 6 个核心工具 + MCP
 │   │   ├── __init__.py              #   工具注册工厂
 │   │   ├── terminal_tool.py         #   沙箱终端
 │   │   ├── python_repl_tool.py      #   Python 解释器
 │   │   ├── fetch_url_tool.py        #   网页抓取（HTML→Markdown）
 │   │   ├── read_file_tool.py        #   沙箱文件读取
 │   │   ├── search_knowledge_tool.py #   知识库搜索
-│   │   └── skills_scanner.py        #   技能目录扫描器
+│   │   ├── skills_scanner.py        #   技能目录扫描器
+│   │   ├── mcp_manager.py           #   MCP 连接管理器
+│   │   └── mcp_tool_wrapper.py      #   MCP 工具包装器
+│   ├── mcp_servers.json             # MCP Server 配置
 │   │
 │   ├── workspace/                   # System Prompt 组件
 │   │   ├── SOUL.md                  #   人格、语气、边界
@@ -187,6 +191,9 @@ mini-OpenClaw/
             │   └── ResizeHandle.tsx  #   面板拖拽分隔条
             └── editor/
                 └── InspectorPanel.tsx #  右侧检查器（Monaco 编辑器）
+            └── mcp/
+                ├── McpPanel.tsx       #  MCP Server 管理面板
+                └── McpServerForm.tsx  #  MCP Server 配置表单
 ```
 
 ## 项目特色
@@ -202,7 +209,7 @@ mini-OpenClaw/
 - Agent 通过 `read_file` 工具读取技能说明，动态学习如何使用
 - 无需编写 Python 代码即可扩展新能力
 
-### 3. 五大核心工具
+### 3. 六大核心工具
 
 | 工具 | 功能 | 使用场景 |
 |------|------|----------|
@@ -211,8 +218,48 @@ mini-OpenClaw/
 | fetch_url | 网页获取 | 获取网页内容（自动转 Markdown） |
 | read_file | 文件读取 | 读取技能文件、配置文件 |
 | search_knowledge_base | 知识库检索 | RAG 模式下检索相关内容 |
+| **MCP Tools** | MCP 协议工具 | 连接外部工具服务器（Excel、文件系统等） |
 
-### 4. 全透明的 System Prompt
+### 4. MCP 工具集成
+
+MCP（Model Context Protocol）是一个开放协议，允许 Agent 连接外部工具服务器，扩展能力边界。
+
+#### 配置 MCP Server
+
+编辑 `backend/mcp_servers.json`：
+
+```json
+{
+  "servers": [
+    {
+      "name": "excel",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["excel-mcp-server", "stdio"],
+      "id": "unique-id"
+    }
+  ]
+}
+```
+
+#### 前端管理
+
+右侧面板新增 MCP 标签页，支持：
+- 查看已连接的 MCP Server 状态
+- 添加/编辑/删除 Server 配置
+- 启用/禁用 Server
+- 热重载连接
+
+#### 常用 MCP Server
+
+| Server | 安装命令 | 功能 |
+|------|------|------|
+| excel-mcp-server | `pip install excel-mcp-server` | Excel 文件操作（创建、读写、格式化） |
+| filesystem | `uvx mcp-server-filesystem <path>` | 文件系统操作 |
+| brave-search | `uvx mcp-server-brave-search` | Brave 搜索集成 |
+
+### 5. 全透明的 System Prompt
 
 System Prompt 由 6 个组件动态拼接：
 
@@ -227,14 +274,15 @@ System Prompt 由 6 个组件动态拼接：
 
 所有组件都可以通过前端编辑器实时修改。
 
-### 5. IDE 风格的前端
+### 6. IDE 风格的前端
 
 - 三栏布局：会话列表 / 聊天面板 / 文件编辑器
 - 支持可视化工具调用链（Thought Chain）
 - 支持对话历史压缩
 - 内置 Monaco 编辑器，在线编辑配置文件
+- MCP Server 管理面板
 
-### 6. 自演进记忆系统
+### 7. 自演进记忆系统
 
 - 每次压缩时提取用户偏好的核心消息作为长期记忆进行存储
 - 减少重复沟通，实现个性化服务的跨会话延续
@@ -326,7 +374,7 @@ astream() 的流式事件序列：
 - 定义记忆增量更新规则（存量校验、新增添加、失效剔除、冲突处理）
 - 强制 Markdown 输出格式（用户信息 / 重要事件 / 长期目标 / 其他备注）
 
-### 五大核心工具 tools/
+### 五大核心工具 + MCP 工具
 
 所有工具均继承 LangChain 的 BaseTool，通过 tools/__init__.py 的 get_all_tools(base_dir) 统一注册。
 
@@ -334,13 +382,44 @@ astream() 的流式事件序列：
 |------|------|------|----------|
 | terminal | terminal_tool.py | 执行 Shell 命令 | 黑名单（rm -rf /、mkfs、shutdown 等）；CWD 限制在项目根目录；30s 超时；输出截断 5000 字符 |
 | python_repl | python_repl_tool.py | 执行 Python 代码 | 封装 LangChain 原生 PythonREPLTool |
-| fetch_url | fetch_url_tool.py | 抓取网页内容 | 自动识别 JSON/HTML；HTML 通过 html2text 转 Markdown；15s 超时；输出截断 5000 字符 |
+| fetch_url | fetch_url_tool.py | 抄取网页内容 | 自动识别 JSON/HTML；HTML 通过 html2text 转 Markdown；15s 超时；输出截断 5000 字符 |
 | read_file | read_file_tool.py | 读取项目内文件 | 路径遍历检查（不可逃逸出 root_dir）；输出截断 10,000 字符 |
 | search_knowledge_base | search_knowledge_tool.py | 搜索知识库 | 惰性加载索引；从 knowledge/ 目录构建；top-3 语义检索；索引持久化到 storage/ |
+| **MCP Tools** | mcp_manager.py + mcp_tool_wrapper.py | MCP 协议工具 | 参数校验；Windows ProactorEventLoop 兼容 |
 
 #### skills_scanner.py
 
 非工具，而是启动时执行的扫描器：遍历 skills/*/SKILL.md，解析 YAML frontmatter（name、description），生成 XML 格式的 SKILLS_SNAPSHOT.md。该快照被纳入 System Prompt，让 Agent 知道有哪些可用技能。
+
+#### MCP 工具系统
+
+MCP（Model Context Protocol）工具系统允许 Agent 通过标准化协议连接外部工具服务器。
+
+**核心组件**：
+
+| 文件 | 功能 |
+|------|------|
+| mcp_manager.py | MCP 连接管理器：负责连接生命周期、工具发现 |
+| mcp_tool_wrapper.py | 将 MCP 工具包装为 LangChain BaseTool |
+| mcp_servers.json | MCP Server 配置文件 |
+
+**传输方式**：
+
+| 传输方式 | 说明 | 适用场景 |
+|------|------|----------|
+| stdio | 标准输入输出通信 | 本地命令行工具（如 uvx 启动的 Server） |
+| sse | HTTP SSE 通信 | 远程 MCP Server |
+
+**Windows 兼容性**：
+
+Windows 上 uvicorn 的 `--reload` 模式使用 SelectorEventLoop，但 MCP stdio 子进程需要 ProactorEventLoop。系统通过后台线程运行 ProactorEventLoop 来解决此兼容性问题。
+
+**参数校验**：
+
+调用 MCP 工具时，系统会根据工具的 `args_schema` 自动校验参数：
+- 必需参数检查：缺失必需参数时返回错误提示
+- 类型校验：使用 Pydantic 模型验证参数类型
+- 智能转换：字符串输入自动匹配到必需字段
 
 ### API 层 api/
 
@@ -430,6 +509,17 @@ POST /api/chat 是系统的核心端点。
 
 配置持久化到 backend/config.json。
 
+#### mcp.py — MCP 管理
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| /api/mcp/servers | GET | 获取所有 MCP Server 配置及状态 |
+| /api/mcp/servers | POST | 添加新的 MCP Server |
+| /api/mcp/servers/{id} | PUT | 更新 MCP Server 配置 |
+| /api/mcp/servers/{id} | DELETE | 删除 MCP Server |
+| /api/mcp/servers/{id}/toggle | POST | 启用/禁用 MCP Server |
+| /api/mcp/reload | POST | 热重载所有 MCP 连接 |
+
 ### Skills 技能系统
 
 技能不是 Python 函数，而是纯 Markdown 指令文件。Agent 通过 read_file 工具读取 SKILL.md，理解步骤后用核心工具执行。
@@ -472,13 +562,15 @@ description: 查询指定城市的天气信息
 │ 会话列表  │   消息气泡                │  Memory / Skills   │
 │          │   ├─ ThoughtChain        │  文件列表           │
 │ Raw Msgs │   ├─ RetrievalCard       │  Monaco 编辑器      │
-│ 扳手/RAG  │   └─ Markdown 内容       │  Token 统计        │
-│ Token 统计│                          │                    │
+│ 扳手/RAG  │   └─ Markdown 内容       │  MCP Server 管理    │
+│ Token 统计│                          │  Token 统计        │
 │          │   ChatInput              │                    │
 ├──────────┴──────────────────────────┴────────────────────┤
 │  ResizeHandle (可拖拽)                                    │
 └──────────────────────────────────────────────────────────┘
 ```
+
+右侧面板新增 MCP 标签页，支持可视化管理 MCP Server：查看连接状态、添加/编辑/删除配置、热重载连接。
 
 **状态管理**：全部通过 store.tsx 的 React Context 管理，包括消息列表、会话切换、面板宽度、流式状态、压缩状态、RAG 模式等。
 
@@ -626,6 +718,8 @@ description: 技能描述
 | 自演进记忆系统 | 压缩时自动提取用户偏好作为长期记忆，减少重复沟通 |
 | Agent 最大迭代轮数提升至 10 | 原 5 轮在复杂任务中易中断，提升至 10 轮保障多步骤任务的完整执行 |
 | 压缩摘要固定前缀 | 为前端提供稳定的渲染判断依据，统一摘要显示风格 |
+| MCP Windows ProactorEventLoop | Windows 上 uvicorn reload 模式使用 SelectorEventLoop，通过后台线程运行 ProactorEventLoop 解决 MCP stdio 子进程兼容性问题 |
+| MCP 参数校验 | 根据工具 args_schema 自动校验参数，缺失必需参数时返回友好错误提示 |
 
 ## API 接口速查
 
@@ -647,6 +741,12 @@ description: 技能描述
 | /api/tokens/files | POST | 文件 Token 统计 |
 | /api/config/rag-mode | GET | 获取 RAG 模式状态 |
 | /api/config/rag-mode | PUT | 切换 RAG 模式 |
+| /api/mcp/servers | GET | 获取所有 MCP Server 配置 |
+| /api/mcp/servers | POST | 添加 MCP Server |
+| /api/mcp/servers/{id} | PUT | 更新 MCP Server 配置 |
+| /api/mcp/servers/{id} | DELETE | 删除 MCP Server |
+| /api/mcp/servers/{id}/toggle | POST | 启用/禁用 MCP Server |
+| /api/mcp/reload | POST | 热重载 MCP 连接 |
 
 ## 开发说明
 

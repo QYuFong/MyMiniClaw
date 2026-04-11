@@ -1,0 +1,15 @@
+{
+  "servers": [
+    {
+      "name": "excel",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": [
+        "excel-mcp-server",
+        "stdio"
+      ],
+      "id": "a1bc92be"
+    }
+  ]
+}

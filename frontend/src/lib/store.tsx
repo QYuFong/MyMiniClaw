@@ -23,10 +23,15 @@ interface AppState {
   rightPanelWidth: number;
   showRawMessages: boolean;
   ragMode: boolean;
+  inspectorTab: 'editor' | 'mcp';
   
   // 编辑器状态
   currentFile: string | null;
   currentFileContent: string;
+  
+  // MCP 状态
+  mcpServers: api.McpServer[];
+  mcpLoading: boolean;
   
   // 方法
   loadSessions: () => Promise<void>;
@@ -40,9 +45,18 @@ interface AppState {
   setRightPanelWidth: (width: number) => void;
   setShowRawMessages: (show: boolean) => void;
   toggleRAGMode: () => Promise<void>;
+  setInspectorTab: (tab: 'editor' | 'mcp') => void;
   
   openFile: (path: string) => Promise<void>;
   saveCurrentFile: (content: string) => Promise<void>;
+  
+  // MCP 方法
+  loadMcpServers: () => Promise<void>;
+  addMcpServer: (server: api.McpServerInput) => Promise<void>;
+  updateMcpServer: (id: string, updates: Partial<api.McpServerInput>) => Promise<void>;
+  deleteMcpServer: (id: string) => Promise<void>;
+  toggleMcpServer: (id: string) => Promise<void>;
+  reloadMcpServers: () => Promise<void>;
 }
 
 const AppContext = createContext<AppState | null>(null);
@@ -61,6 +75,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [currentFileContent, setCurrentFileContent] = useState('');
+  const [inspectorTab, setInspectorTab] = useState<'editor' | 'mcp'>('editor');
+  
+  const [mcpServers, setMcpServers] = useState<api.McpServer[]>([]);
+  const [mcpLoading, setMcpLoading] = useState(false);
   
   // 加载会话列表
   const loadSessions = async () => {
@@ -251,9 +269,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
   
+  // MCP 方法
+  const loadMcpServers = async () => {
+    try {
+      setMcpLoading(true);
+      const servers = await api.getMcpServers();
+      setMcpServers(servers);
+    } catch (error) {
+      console.error('Failed to load MCP servers:', error);
+    } finally {
+      setMcpLoading(false);
+    }
+  };
+
+  const addMcpServerAction = async (server: api.McpServerInput) => {
+    try {
+      await api.addMcpServer(server);
+      await loadMcpServers();
+    } catch (error) {
+      console.error('Failed to add MCP server:', error);
+      throw error;
+    }
+  };
+
+  const updateMcpServerAction = async (id: string, updates: Partial<api.McpServerInput>) => {
+    try {
+      await api.updateMcpServer(id, updates);
+      await loadMcpServers();
+    } catch (error) {
+      console.error('Failed to update MCP server:', error);
+      throw error;
+    }
+  };
+
+  const deleteMcpServerAction = async (id: string) => {
+    try {
+      await api.deleteMcpServer(id);
+      await loadMcpServers();
+    } catch (error) {
+      console.error('Failed to delete MCP server:', error);
+      throw error;
+    }
+  };
+
+  const toggleMcpServerAction = async (id: string) => {
+    try {
+      await api.toggleMcpServer(id);
+      await loadMcpServers();
+    } catch (error) {
+      console.error('Failed to toggle MCP server:', error);
+      throw error;
+    }
+  };
+
+  const reloadMcpServersAction = async () => {
+    try {
+      setMcpLoading(true);
+      const result = await api.reloadMcpServers();
+      setMcpServers(result.servers);
+    } catch (error) {
+      console.error('Failed to reload MCP servers:', error);
+      throw error;
+    } finally {
+      setMcpLoading(false);
+    }
+  };
+
   // 初始化
   useEffect(() => {
     loadSessions();
+    loadMcpServers();
     
     // 加载 RAG 模式
     api.getRAGMode().then(setRagMode).catch(console.error);
@@ -270,9 +355,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     rightPanelWidth,
     showRawMessages,
     ragMode,
+    inspectorTab,
     
     currentFile,
     currentFileContent,
+    
+    mcpServers,
+    mcpLoading,
     
     loadSessions,
     createSession,
@@ -285,9 +374,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setRightPanelWidth,
     setShowRawMessages,
     toggleRAGMode,
+    setInspectorTab,
     
     openFile,
     saveCurrentFile,
+    
+    loadMcpServers,
+    addMcpServer: addMcpServerAction,
+    updateMcpServer: updateMcpServerAction,
+    deleteMcpServer: deleteMcpServerAction,
+    toggleMcpServer: toggleMcpServerAction,
+    reloadMcpServers: reloadMcpServersAction,
   };
   
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
