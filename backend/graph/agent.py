@@ -1,6 +1,7 @@
 """Agent 管理器"""
 import json
 import logging
+import re
 from pathlib import Path
 from typing import List, Dict, Any, AsyncGenerator, Optional
 
@@ -15,6 +16,73 @@ from .prompt_builder import PromptBuilder
 from .session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+# 记忆主题关键词（用于判断是否需要检索）
+MEMORY_TOPIC_KEYWORDS = {
+    # 核心身份与基础属性
+    "identity": [
+        "姓名", "名字", "昵称", "称呼", "职业", "工作", "岗位", "职位", "公司",
+        "技术栈", "编程", "语言", "框架", "工具", "系统", "设备", "地区", "城市",
+        "时区", "语言偏好", "能力", "技能", "擅长", "熟悉", "精通", "我是", "我叫"
+    ],
+    # 交互偏好与行为模式
+    "preference": [
+        "喜欢", "不喜欢", "偏好", "希望", "想要", "习惯", "风格", "简洁", "详细",
+        "格式", "输出", "回复", "沟通", "语气", "禁忌", "反感", "讨厌", "避免",
+        "不要", "提醒", "注意", "警告", "记住", "记得"
+    ],
+    # 知识边界与经验教训
+    "knowledge": [
+        "了解", "知道", "学习", "研究", "陌生", "不熟悉", "不知道", "不了解",
+        "踩坑", "踩过坑", "问题", "故障", "排错", "排障", "解决", "修复", "错误",
+        "认知", "纠正", "经验", "教训", "碰到", "遇到", "坑", "bug"
+    ],
+    # 价值观与核心诉求
+    "values": [
+        "价值观", "价值", "诉求", "目标", "重要", "关键", "核心", "痛点", "困扰",
+        "困难", "问题", "需求", "期望", "伦理", "合规", "原则", "底线", "坚持"
+    ],
+    # 期目标与持续任务
+    "goals": [
+        "目标", "计划", "项目", "任务", "进行", "持续", "推进", "开发", "研究",
+        "待办", "todo", "承诺", "约定", "最近", "当前", "正在", "打算", "准备"
+    ]
+}
+
+
+def should_retrieve_memory(query: str) -> bool:
+    """判断用户输入是否涉及记忆主题
+
+    Args:
+        query: 用户输入
+
+    Returns:
+        是否需要检索记忆
+    """
+    query_lower = query.lower()
+
+    # 检查是否包含记忆主题关键词
+    for category, keywords in MEMORY_TOPIC_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in query_lower:
+                logger.info(f"[MEMORY] 检测到记忆主题关键词 '{keyword}' (分类: {category})")
+                return True
+
+    # 检查是否包含询问用户信息的问题模式
+    question_patterns = [
+        r"我(的|是|叫|用|在|做|学|研究|开发|擅长|熟悉|精通|了解)",
+        r"你(知道|了解|记得|记住|还记得)我",
+        r"我的(姓名|名字|昵称|职业|工作|技术栈|偏好|习惯|目标|计划)",
+        r"(记得|记住|提醒|别忘了)",
+    ]
+
+    for pattern in question_patterns:
+        if re.search(pattern, query_lower):
+            logger.info(f"[MEMORY] 检测到记忆相关问题模式: {pattern}")
+            return True
+
+    return False
 
 
 class AgentManager:
@@ -106,12 +174,12 @@ class AgentManager:
         
         # 构建 Agent
         rag_mode = global_config.config.get_rag_mode()
-        
-        # RAG 模式：先检索记忆
+
+        # RAG 模式：仅在涉及记忆主题时检索
         retrieval_results = []
-        if rag_mode:
+        if rag_mode and should_retrieve_memory(message):
             retrieval_results = self.memory_indexer.retrieve(message, top_k=3)
-            
+
             if retrieval_results:
                 logger.info(f"[RAG] 检索到 {len(retrieval_results)} 条相关记忆")
                 yield {
@@ -119,16 +187,18 @@ class AgentManager:
                     "query": message,
                     "results": retrieval_results
                 }
-                
+
                 # 将检索结果追加到历史（仅本次请求）
                 retrieval_text = "[记忆检索结果]\n\n"
                 for i, result in enumerate(retrieval_results, 1):
                     retrieval_text += f"[片段 {i}] (相关度: {result['score']:.3f})\n{result['text']}\n\n"
-                
+
                 history = history + [{
                     "role": "assistant",
                     "content": retrieval_text
                 }]
+        elif rag_mode:
+            logger.info(f"[RAG] 用户输入不涉及记忆主题，跳过检索")
         
         # 构建 System Prompt
         system_prompt = self.prompt_builder.build_system_prompt(rag_mode=rag_mode)
