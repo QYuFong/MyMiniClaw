@@ -251,11 +251,11 @@ class AgentManager:
                     logger.info(f"[TOOL] 工具参数: {tool_args}")
                     logger.info(f"[TOOL] Tool Call ID: {tool_call_id}")
 
-                    # MCP 工具需要完整的参数字典，其他工具提取单个值
-                    if tool_name.startswith('mcp_'):
-                        # MCP 工具：传递完整参数字典
+                    # MCP 工具和 write_memory 工具需要完整的参数字典，其他工具提取单个值
+                    if tool_name.startswith('mcp_') or tool_name == 'write_memory':
+                        # MCP 工具 / write_memory 工具：传递完整参数字典
                         tool_input = tool_args if isinstance(tool_args, dict) else {}
-                        logger.info(f"[TOOL] MCP 工具，保留完整参数: {tool_input}")
+                        logger.info(f"[TOOL] {tool_name} 工具，保留完整参数: {tool_input}")
                     elif isinstance(tool_args, dict):
                         # 其他工具：提取第一个参数值（如 query, path, input 等）
                         tool_input = tool_args.get('query') or tool_args.get('path') or tool_args.get('input') or list(tool_args.values())[0] if tool_args else ""
@@ -586,6 +586,12 @@ INPUT: skills/get_weather/SKILL.md
                 result = tool._run(**validated_input)
             else:
                 result = tool._run(validated_input)
+
+            # 记忆工具写入后重建索引
+            if tool_name == "write_memory" and self.memory_indexer:
+                self.memory_indexer.rebuild_index()
+                logger.info("[MEMORY] 记忆写入后，索引已重建")
+
             return result
         except Exception as e:
             logger.error(f"[TOOL] 工具执行异常: {e}")

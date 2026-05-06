@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Dict, Any
 import json
 
 from graph.agent import agent_manager
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # 日志文件
 log_file = Path(__file__).parent.parent / "debug.log"
+
 
 def log_to_file(msg: str):
     """直接写入日志文件"""
@@ -36,6 +37,29 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     stream: bool = True
+
+
+async def trigger_memory_extraction(messages: List[Dict[str, Any]]) -> str:
+    """触发记忆提取
+
+    使用 compress.py 中的 _evolve_memory 函数
+
+    Args:
+        messages: 会话消息列表
+
+    Returns:
+        提取后的记忆内容
+    """
+    from api.compress import _evolve_memory
+
+    try:
+        log_to_file(f"[MEMORY] 开始自动记忆提取，消息数量: {len(messages)}")
+        latest_memory = await _evolve_memory(messages)
+        log_to_file(f"[MEMORY] 记忆提取完成，长度: {len(latest_memory)} 字符")
+        return latest_memory
+    except Exception as e:
+        log_to_file(f"[MEMORY] 记忆提取失败: {str(e)}")
+        return ""
 
 
 async def event_generator(
@@ -108,11 +132,11 @@ async def event_generator(
                 # 从 agent 返回的 messages 列表中保存所有消息
                 generated_messages = event.get("messages", [])
                 log_to_file(f"[API] 收到 {len(generated_messages)} 条生成的消息")
-                
+
                 for msg in generated_messages:
                     role = msg.get("role", "assistant")
                     content = msg.get("content", "")
-                    
+
                     if role == "assistant":
                         tool_calls = msg.get("tool_calls")
                         agent_manager.session_manager.save_message(
@@ -129,7 +153,29 @@ async def event_generator(
                             name=msg.get("name", ""),
                             content=content
                         )
-                
+
+                # === 轮次计数与记忆提取 ===
+                # 增加轮次计数
+                current_turn = agent_manager.session_manager.increment_turn_count(session_id)
+                log_to_file(f"[API] 当前轮次: {current_turn}")
+
+                # 检查是否需要触发记忆提取（每5轮）
+                if agent_manager.session_manager.should_trigger_memory_extraction(session_id):
+                    log_to_file(f"[API] 触发自动记忆提取（每5轮）")
+
+                    # 获取当前会话所有消息
+                    all_messages = agent_manager.session_manager.load_session(session_id)
+
+                    # 调用记忆提取
+                    memory_result = await trigger_memory_extraction(all_messages)
+
+                    # 更新上次提取轮次
+                    agent_manager.session_manager.update_last_memory_turn(session_id, current_turn)
+
+                    # 通知前端记忆已更新
+                    if memory_result:
+                        yield f"event: memory_updated\ndata: {json.dumps({'turn': current_turn}, ensure_ascii=False)}\n\n"
+
                 yield f"event: done\ndata: {json.dumps({'content': full_content, 'session_id': session_id}, ensure_ascii=False)}\n\n"
             
             elif event_type == "error":

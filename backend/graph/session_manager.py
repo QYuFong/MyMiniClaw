@@ -8,12 +8,100 @@ import shutil
 
 class SessionManager:
     """管理会话的持久化存储"""
-    
+
     def __init__(self, base_dir: Path):
         self.sessions_dir = base_dir / "sessions"
         self.archive_dir = self.sessions_dir / "archive"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    # ==================== 轮次计数相关方法 ====================
+
+    def increment_turn_count(self, session_id: str) -> int:
+        """增加轮次计数并返回当前轮次
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            当前轮次号（新增后的）
+        """
+        session_file = self.sessions_dir / f"{session_id}.json"
+
+        if not session_file.exists():
+            # 新会话，轮次为 1
+            return 1
+
+        data = self._read_file(session_file)
+        current_turn = data.get("turn_count", 0) + 1
+        data["turn_count"] = current_turn
+        data["updated_at"] = time.time()
+
+        self._write_file(session_file, data)
+        return current_turn
+
+    def get_turn_count(self, session_id: str) -> int:
+        """获取当前轮次
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            当前轮次号（如果新会话返回 0）
+        """
+        session_file = self.sessions_dir / f"{session_id}.json"
+
+        if not session_file.exists():
+            return 0
+
+        data = self._read_file(session_file)
+        return data.get("turn_count", 0)
+
+    def update_last_memory_turn(self, session_id: str, turn: int) -> None:
+        """更新上次记忆提取时的轮次
+
+        Args:
+            session_id: 会话 ID
+            turn: 提取时的轮次号
+        """
+        session_file = self.sessions_dir / f"{session_id}.json"
+
+        if not session_file.exists():
+            return
+
+        data = self._read_file(session_file)
+        data["last_memory_turn"] = turn
+        data["updated_at"] = time.time()
+
+        self._write_file(session_file, data)
+
+    def should_trigger_memory_extraction(self, session_id: str) -> bool:
+        """判断是否应该触发记忆提取
+
+        触发条件：每 5 轮触发一次
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            是否应该触发
+        """
+        current_turn = self.get_turn_count(session_id)
+        session_file = self.sessions_dir / f"{session_id}.json"
+
+        if not session_file.exists():
+            return False
+
+        data = self._read_file(session_file)
+        last_memory_turn = data.get("last_memory_turn", 0)
+
+        # 计算距离上次提取的轮次差
+        turns_since_last_extraction = current_turn - last_memory_turn
+
+        # 每 5 轮触发
+        return turns_since_last_extraction >= 5
+
+    # ==================== 会话管理方法 ====================
     
     def load_session(self, session_id: str) -> List[Dict[str, Any]]:
         """加载会话的原始消息列表
@@ -231,22 +319,22 @@ class SessionManager:
         summary: str
     ) -> None:
         """将所有消息替换为一条 assistant 摘要消息
-        
+
         用于完全压缩对话历史，保留用户提问和核心上下文
         压缩后 messages 只保留一条 assistant 消息，内容是摘要
-        
+
         Args:
             session_id: 会话 ID
             summary: 压缩摘要内容
         """
         session_file = self.sessions_dir / f"{session_id}.json"
-        
+
         if not session_file.exists():
             return
-        
+
         data = self._read_file(session_file)
         original_messages = data.get("messages", [])
-        
+
         # 归档原始消息
         timestamp = int(time.time())
         archive_file = self.archive_dir / f"{session_id}_{timestamp}.json"
@@ -254,9 +342,11 @@ class SessionManager:
             "session_id": session_id,
             "archived_at": timestamp,
             "messages": original_messages,
-            "compressed_context": data.get("compressed_context", "")  # 同时归档之前的压缩上下文
+            "compressed_context": data.get("compressed_context", ""),
+            "turn_count": data.get("turn_count", 0),  # 归档时保存轮次
+            "last_memory_turn": data.get("last_memory_turn", 0)  # 归档时保存提取轮次
         })
-        
+
         # 用一条 assistant 摘要消息替换所有消息
         data["messages"] = [
             {
@@ -264,11 +354,15 @@ class SessionManager:
                 "content": summary
             }
         ]
-        
+
         # 清空 compressed_context（摘要已经在 messages 里了）
         data["compressed_context"] = ""
+
+        # 关键：保留轮次计数字段（新一轮继续累加）
+        # turn_count 和 last_memory_turn 保持不变
+
         data["updated_at"] = time.time()
-        
+
         self._write_file(session_file, data)
     
     def get_compressed_context(self, session_id: str) -> str:
@@ -332,10 +426,10 @@ class SessionManager:
         return False
     
     def _read_file(self, file_path: Path) -> Dict[str, Any]:
-        """读取会话文件（兼容 v1 格式）"""
+        """读取会话文件（兼容 v1/v2/v3 格式）"""
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
+
         # v1 兼容：如果是纯数组，转换为 v2 格式
         if isinstance(data, list):
             data = {
@@ -344,7 +438,13 @@ class SessionManager:
                 "updated_at": file_path.stat().st_mtime,
                 "messages": data
             }
-        
+
+        # v2 兼容：添加轮次计数字段（默认值）
+        if "turn_count" not in data:
+            data["turn_count"] = 0
+        if "last_memory_turn" not in data:
+            data["last_memory_turn"] = 0
+
         return data
     
     def _write_file(self, file_path: Path, data: Dict[str, Any]) -> None:
