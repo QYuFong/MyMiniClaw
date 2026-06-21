@@ -292,6 +292,14 @@ class McpManager:
                 f"[MCP] Server '{server_name}' 连接成功，发现 {len(tool_infos)} 个工具"
             )
 
+        except FileNotFoundError as e:
+            # 命令不存在，给出友好的安装提示
+            command = server_cfg.get("command", "")
+            error_detail = str(e) if str(e) else f"命令 '{command}' 未找到"
+            conn.status = "error"
+            conn.error = error_detail
+            logger.error(f"[MCP] Server '{server_name}' 连接失败: {error_detail}")
+            logger.error(f"[MCP] 请确保已安装 '{command}'，macOS 可通过 brew/pip 安装")
         except Exception as e:
             import traceback
             error_detail = str(e) if str(e) else f"{type(e).__name__}"

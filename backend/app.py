@@ -22,6 +22,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 import time
 
 import config as global_config
@@ -124,24 +125,49 @@ app.add_middleware(
 )
 
 
-# 添加请求日志中间件
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """记录所有请求"""
-    start_time = time.time()
-    
-    msg = f"\n{'='*60}\n[REQUEST] {request.method} {request.url.path}\n[REQUEST] Client: {request.client.host if request.client else 'unknown'}\n{'='*60}\n"
-    logger.info(msg)
-    log_to_file(msg)
-    
-    response = await call_next(request)
-    
-    process_time = time.time() - start_time
-    result_msg = f"\n[RESPONSE] Status: {response.status_code}, Time: {process_time:.3f}s\n"
-    logger.info(result_msg)
-    log_to_file(result_msg)
-    
-    return response
+# 添加请求日志中间件（纯 ASGI middleware，避免 BaseHTTPMiddleware 的 anyio cancel scope 冲突）
+class RequestLoggingMiddleware:
+    """纯 ASGI 请求日志中间件。
+
+    使用纯 ASGI middleware 而非 @app.middleware("http")（BaseHTTPMiddleware），
+    以避免 anyio.create_task_group() 与 MCP SDK 内部 anyio cancel scope 的嵌套冲突。
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start_time = time.time()
+        method = scope.get("method", "?")
+        path = scope.get("path", "?")
+        client_host = scope.get("client", ("unknown", 0))[0] if scope.get("client") else "unknown"
+
+        msg = f"\n{'='*60}\n[REQUEST] {method} {path}\n[REQUEST] Client: {client_host}\n{'='*60}\n"
+        logger.info(msg)
+        log_to_file(msg)
+
+        response_status = [0]  # mutable capture for send wrapper
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                response_status[0] = message.get("status", 0)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            process_time = time.time() - start_time
+            status_code = response_status[0] or 500
+            result_msg = f"\n[RESPONSE] Status: {status_code}, Time: {process_time:.3f}s\n"
+            logger.info(result_msg)
+            log_to_file(result_msg)
+
+
+app.add_middleware(RequestLoggingMiddleware)
 
 # 注册路由
 app.include_router(chat.router, prefix="/api", tags=["Chat"])

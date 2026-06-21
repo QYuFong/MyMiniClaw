@@ -3,6 +3,7 @@
     {
       "name": "excel",
       "enabled": true,
+      "_comment": "需要先安装: brew install uv && uvx excel-mcp-server stdio（macOS）或 pip install excel-mcp-server（Windows）",
       "transport": "stdio",
       "command": "uvx",
       "args": [
