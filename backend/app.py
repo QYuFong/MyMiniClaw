@@ -85,9 +85,13 @@ async def lifespan(app: FastAPI):
     # 4. 初始化 Agent（传入 mcp_manager）
     agent_manager.initialize(base_dir, mcp_manager=mcp_mgr)
     
-    # 5. 构建 MEMORY.md 索引
+    # 5. 构建 MEMORY.md 索引（容错：API Key 未配置时跳过）
     print("正在构建 MEMORY.md 索引...")
-    agent_manager.memory_indexer.rebuild_index()
+    try:
+        agent_manager.memory_indexer.rebuild_index()
+    except Exception as e:
+        print(f"⚠ MEMORY.md 索引构建失败: {e}")
+        print(f"⚠ RAG 记忆检索功能暂时不可用，请检查 .env 中的 API Key 配置")
     
     print("=" * 50)
     print("✓ Mini-OpenClaw 启动完成！")

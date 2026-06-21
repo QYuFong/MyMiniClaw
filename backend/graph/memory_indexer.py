@@ -154,32 +154,35 @@ class MemoryIndexer:
     
     def _maybe_rebuild(self) -> None:
         """检查文件是否变更，变更则重建索引"""
-        # 如果索引不存在，先尝试加载
-        if self._index is None:
-            if (self.storage_dir / "docstore.json").exists():
-                try:
-                    # 配置 Embedding 模型（优先使用本地 Ollama）
-                    Settings.embed_model = get_embedding_model()
-                    
-                    storage_context = StorageContext.from_defaults(
-                        persist_dir=str(self.storage_dir)
-                    )
-                    self._index = load_index_from_storage(storage_context)
-                except Exception:
-                    pass
-        
-        # 检查文件是否存在
-        if not self.memory_file.exists():
+        try:
+            # 如果索引不存在，先尝试加载
             if self._index is None:
+                if (self.storage_dir / "docstore.json").exists():
+                    try:
+                        # 配置 Embedding 模型（优先使用本地 Ollama）
+                        Settings.embed_model = get_embedding_model()
+
+                        storage_context = StorageContext.from_defaults(
+                            persist_dir=str(self.storage_dir)
+                        )
+                        self._index = load_index_from_storage(storage_context)
+                    except Exception:
+                        pass
+
+            # 检查文件是否存在
+            if not self.memory_file.exists():
+                if self._index is None:
+                    self.rebuild_index()
+                return
+
+            # 计算当前哈希
+            with open(self.memory_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            current_hash = hashlib.md5(content.encode()).hexdigest()
+
+            # 如果哈希不同，重建索引
+            if current_hash != self._last_hash:
+                print("检测到 MEMORY.md 变更，正在重建索引...")
                 self.rebuild_index()
-            return
-        
-        # 计算当前哈希
-        with open(self.memory_file, 'r', encoding='utf-8') as f:
-            content = f.read()
-        current_hash = hashlib.md5(content.encode()).hexdigest()
-        
-        # 如果哈希不同，重建索引
-        if current_hash != self._last_hash:
-            print("检测到 MEMORY.md 变更，正在重建索引...")
-            self.rebuild_index()
+        except Exception as e:
+            print(f"⚠ 索引更新失败 (非致命): {e}")
